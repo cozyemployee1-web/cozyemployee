@@ -1,0 +1,18 @@
+{
+  "name": "workflows",
+  "version": "1.0.0",
+  "description": "Upstash Workflow nerve net — SOPs as code",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "NODE_ENV=development node src/server.js",
+    "test": "node src/test.js"
+  },
+  "dependencies": {
+    "@upstash/box": "^0.1.30",
+    "@upstash/qstash": "^2.7.1",
+    "@upstash/workflow": "^0.2.4",
+    "express": "^4.21.2"
+  },
+  "license": "ISC"
+}
