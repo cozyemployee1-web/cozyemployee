@@ -1,0 +1,14 @@
+{
+  "_note": "Run 'npm run create-snapshots' to generate these for your account.",
+  "_docs": "Each key maps to a Box snapshot ID for that personality/role.",
+  "manager": "",
+  "architect": "",
+  "connector": "",
+  "executor": "",
+  "visionary": "",
+  "analyst": "",
+  "guardian": "",
+  "explorer": "",
+  "challenger": "",
+  "synthesizer": ""
+}

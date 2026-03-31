@@ -1,0 +1,23 @@
+{
+  "name": "cozyemployee-mesh",
+  "version": "0.1.0",
+  "description": "CozyEmployee multi-personality mesh conversation system",
+  "scripts": {
+    "create-snapshots": "tsx scripts/create-snapshots.ts",
+    "create-snapshots-force": "tsx scripts/create-snapshots.ts --force",
+    "preflight": "node preflight/preflight.js",
+    "preflight:quick": "node preflight/preflight.js --quick",
+    "preflight:box": "node preflight/preflight.js --box",
+    "preflight:report": "node preflight/preflight.js --report"
+  },
+  "dependencies": {
+    "@upstash/box": "^0.1.30",
+    "@upstash/qstash": "^2.7.21",
+    "@upstash/redis": "^1.34.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.0"
+  }
+}

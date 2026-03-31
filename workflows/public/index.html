@@ -1,0 +1,1962 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CozyEmployee Mission Control</title>
+
+  <!-- Alpine.js — reactive state, zero build step -->
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+  <!-- Chart.js — streaming metrics charts -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+  <!-- xterm.js — GPU-accelerated log terminal -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css" />
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.js"></script>
+  <!-- Ably -->
+  <script src="https://cdn.ably.com/lib/ably.min-2.js"></script>
+
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:       #0a0c10;
+      --s1:       #111318;
+      --s2:       #181b22;
+      --s3:       #1e222c;
+      --border:   #252a38;
+      --accent:   #5b8dee;
+      --green:    #3dd68c;
+      --amber:    #f5a623;
+      --red:      #e85555;
+      --purple:   #9b72f8;
+      --text:     #dde1eb;
+      --muted:    #556080;
+      --glow-b:   0 0 12px rgba(91,141,238,.35);
+      --glow-g:   0 0 12px rgba(61,214,140,.35);
+    }
+
+    html, body { height: 100%; overflow: hidden; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Inter', 'SF Pro Display', system-ui, sans-serif;
+      font-size: 13px;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Animations ──────────────────────────────── */
+    @keyframes fadeUp   { from { opacity:0; transform:translateY(6px) } to { opacity:1; transform:none } }
+    @keyframes pulse    { 0%,100%{opacity:1} 50%{opacity:.35} }
+    @keyframes glow     { 0%,100%{box-shadow:0 0 4px var(--accent)} 50%{box-shadow:0 0 16px var(--accent)} }
+    @keyframes shimmer  { 0%{background-position:-200% 0} 100%{background-position:200% 0} }
+    @keyframes countUp  { from{transform:scale(1.4);opacity:.6} to{transform:scale(1);opacity:1} }
+
+    .anim-fade-up { animation: fadeUp .2s ease both; }
+    .anim-count   { animation: countUp .25s ease both; }
+
+    /* ── Header ──────────────────────────────────── */
+    header {
+      height: 50px;
+      background: var(--s1);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 18px;
+      flex-shrink: 0;
+      z-index: 200;
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: -.02em;
+    }
+
+    .logo-badge {
+      background: linear-gradient(135deg, var(--accent), var(--purple));
+      border-radius: 6px;
+      padding: 3px 7px;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+      color: #fff;
+    }
+
+    .tabs {
+      display: flex;
+      gap: 1px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 3px;
+    }
+
+    .tab {
+      padding: 5px 15px;
+      border-radius: 5px;
+      border: none;
+      background: transparent;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all .15s;
+      white-space: nowrap;
+    }
+    .tab:hover { color: var(--text); }
+    .tab.active { background: var(--s3); color: var(--text); }
+
+    .conn {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .conn-dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: var(--muted);
+      transition: background .3s, box-shadow .3s;
+    }
+    .conn-dot.connected  { background: var(--green); box-shadow: var(--glow-g); }
+    .conn-dot.connecting { background: var(--amber); animation: pulse 1s infinite; }
+    .conn-dot.failed     { background: var(--red); }
+
+    /* ── Stats strip ─────────────────────────────── */
+    .stats-strip {
+      display: flex;
+      background: var(--s1);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+
+    .stat-cell {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 16px;
+      border-right: 1px solid var(--border);
+      min-width: 0;
+    }
+    .stat-cell:last-child { border-right: none; }
+
+    .stat-icon {
+      width: 32px; height: 32px;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 15px;
+      flex-shrink: 0;
+    }
+
+    .stat-icon.blue   { background: rgba(91,141,238,.15); }
+    .stat-icon.green  { background: rgba(61,214,140,.15); }
+    .stat-icon.amber  { background: rgba(245,166,35,.15); }
+    .stat-icon.red    { background: rgba(232,85,85,.15); }
+    .stat-icon.purple { background: rgba(155,114,248,.15); }
+    .stat-icon.teal   { background: rgba(45,212,191,.15); }
+
+    .stat-body { min-width: 0; }
+    .stat-val  {
+      font-size: 22px;
+      font-weight: 800;
+      line-height: 1;
+      font-variant-numeric: tabular-nums;
+      letter-spacing: -.02em;
+    }
+    .stat-val.blue   { color: var(--accent); }
+    .stat-val.green  { color: var(--green); }
+    .stat-val.amber  { color: var(--amber); }
+    .stat-val.red    { color: var(--red); }
+    .stat-val.purple { color: var(--purple); }
+    .stat-val.teal   { color: #2dd4bf; }
+    .stat-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; margin-top: 1px; }
+
+    /* ── Views ───────────────────────────────────── */
+    .view { display: none; flex: 1; overflow: hidden; }
+    .view.active { display: flex; }
+
+    /* ── OPS view ────────────────────────────────── */
+    #view-ops {
+      flex-direction: column;
+      gap: 1px;
+      background: var(--border);
+    }
+
+    .ops-top {
+      display: flex;
+      flex: 1;
+      gap: 1px;
+      background: var(--border);
+      min-height: 0;
+    }
+
+    .ops-bottom {
+      height: 220px;
+      flex-shrink: 0;
+      display: flex;
+      gap: 1px;
+      background: var(--border);
+    }
+
+    /* ── Panel ───────────────────────────────────── */
+    .panel {
+      background: var(--bg);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .ph {
+      background: var(--s1);
+      border-bottom: 1px solid var(--border);
+      padding: 9px 13px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-shrink: 0;
+    }
+    .ph-title {
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      color: var(--muted);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .ph-badge {
+      background: var(--s3);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1px 7px;
+      font-size: 10px;
+      color: var(--muted);
+      font-weight: 700;
+    }
+
+    .pb { flex: 1; overflow-y: auto; padding: 8px; }
+    .pb::-webkit-scrollbar { width: 3px; }
+    .pb::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+    /* ── Workflow cards ──────────────────────────── */
+    .wf-card {
+      background: var(--s1);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px;
+      margin-bottom: 6px;
+      cursor: pointer;
+      transition: border-color .12s, background .12s;
+      animation: fadeUp .18s ease both;
+    }
+    .wf-card:hover   { border-color: var(--accent); background: var(--s2); }
+    .wf-card.sel     { border-color: var(--accent); background: var(--s2); box-shadow: var(--glow-b); }
+
+    .wf-top    { display:flex; align-items:center; justify-content:space-between; margin-bottom:5px; }
+    .wf-id     { font-family:monospace; font-size:11px; color:var(--accent); font-weight:700; }
+    .wf-badge  { display:flex; align-items:center; gap:4px; font-size:10px; font-weight:700; text-transform:uppercase; }
+    .wf-dot    { width:5px; height:5px; border-radius:50%; }
+    .b-running   .wf-dot { background:var(--accent); animation:pulse 1s infinite; }
+    .b-completed .wf-dot { background:var(--green); }
+    .b-failed    .wf-dot { background:var(--red); }
+    .b-waiting   .wf-dot { background:var(--amber); animation:pulse 1.5s infinite; }
+    .b-running   { color:var(--accent); }
+    .b-completed { color:var(--green); }
+    .b-failed    { color:var(--red); }
+    .b-waiting   { color:var(--amber); }
+    .wf-dur      { color:var(--muted); font-weight:400; margin-left:3px; }
+    .wf-meta     { font-size:11px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-bottom:6px; }
+    .wf-steps    { display:flex; flex-wrap:wrap; gap:3px; }
+    .step-pill   { font-size:9px; padding:2px 6px; border-radius:3px; border:1px solid var(--border); color:var(--muted); background:var(--bg); font-weight:600; transition:all .12s; }
+    .step-pill.completed { border-color:var(--green); color:var(--green); background:rgba(61,214,140,.07); }
+    .step-pill.started   { border-color:var(--accent); color:var(--accent); background:rgba(91,141,238,.07); animation:pulse 1s infinite; }
+    .step-pill.failed    { border-color:var(--red); color:var(--red); background:rgba(232,85,85,.07); }
+
+    /* ── Watch bar ───────────────────────────────── */
+    .watch-bar {
+      padding: 7px 10px;
+      background: var(--s1);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      gap: 6px;
+      flex-shrink: 0;
+    }
+    .watch-input {
+      flex: 1;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      padding: 5px 9px;
+      color: var(--text);
+      font-size: 11px;
+      font-family: monospace;
+      outline: none;
+      transition: border-color .15s;
+    }
+    .watch-input:focus { border-color: var(--accent); }
+    .watch-input::placeholder { color: var(--muted); }
+    .btn-xs {
+      padding: 5px 11px;
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: 5px;
+      font-size: 11px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: opacity .12s;
+      white-space: nowrap;
+    }
+    .btn-xs:hover { opacity: .85; }
+    .btn-xs.ghost { background: var(--s3); color: var(--muted); border: 1px solid var(--border); }
+
+    /* ── xterm terminal panel ────────────────────── */
+    #terminal-container {
+      flex: 1;
+      overflow: hidden;
+      padding: 0;
+      background: #0a0c10;
+    }
+
+    .xterm { height: 100%; padding: 4px 8px; }
+    .xterm-viewport::-webkit-scrollbar { width: 3px; }
+    .xterm-viewport::-webkit-scrollbar-thumb { background: var(--border); }
+
+    /* ── Charts panel ────────────────────────────── */
+    .charts-row {
+      display: flex;
+      gap: 1px;
+      background: var(--border);
+      flex: 1;
+    }
+
+    .chart-panel {
+      background: var(--bg);
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    canvas { max-height: 100%; }
+
+    /* ── Approvals panel ─────────────────────────── */
+    .appr-card {
+      background: var(--s1);
+      border: 1px solid rgba(232,85,85,.4);
+      border-radius: 8px;
+      padding: 12px;
+      margin-bottom: 8px;
+      animation: fadeUp .2s ease both;
+      box-shadow: 0 0 10px rgba(232,85,85,.08);
+    }
+
+    .risk-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      font-size: 9px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: .07em;
+      padding: 2px 7px;
+      border-radius: 10px;
+      margin-bottom: 7px;
+    }
+    .r-high   { background:rgba(232,85,85,.12);  color:var(--red);   border:1px solid rgba(232,85,85,.3); }
+    .r-medium { background:rgba(245,166,35,.12); color:var(--amber); border:1px solid rgba(245,166,35,.3); }
+    .r-low    { background:rgba(61,214,140,.12); color:var(--green); border:1px solid rgba(61,214,140,.3); }
+
+    .appr-tool { font-family:monospace; font-size:12px; font-weight:700; margin-bottom:3px; }
+    .appr-run  { font-size:10px; color:var(--muted); margin-bottom:7px; }
+    .appr-ctx  { font-size:11px; background:var(--s2); border-radius:4px; padding:7px; margin-bottom:7px; line-height:1.5; border:1px solid var(--border); }
+    .appr-args { font-family:monospace; font-size:10px; color:var(--muted); background:var(--bg); border-radius:4px; padding:5px 8px; margin-bottom:9px; white-space:pre-wrap; border:1px solid var(--border); }
+    .appr-btns { display:flex; gap:6px; }
+    .btn-approve {
+      flex:1; padding:7px; border-radius:5px; font-size:11px; font-weight:700;
+      cursor:pointer; border:none; background:var(--green); color:#000;
+      transition:opacity .12s, transform .1s;
+    }
+    .btn-reject  {
+      flex:1; padding:7px; border-radius:5px; font-size:11px; font-weight:700;
+      cursor:pointer; background:var(--s3); color:var(--red);
+      border:1px solid rgba(232,85,85,.4);
+      transition:opacity .12s, transform .1s;
+    }
+    .btn-approve:hover, .btn-reject:hover { opacity:.85; }
+    .btn-approve:active, .btn-reject:active { transform:scale(.97); }
+    .btn-approve:disabled, .btn-reject:disabled { opacity:.4; cursor:not-allowed; }
+
+    /* ── FLOOR view ──────────────────────────────── */
+    #view-floor {
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .floor-grid {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px;
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+      gap: 12px;
+      align-content: start;
+    }
+
+    .desk {
+      background: var(--s1);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 15px;
+      transition: border-color .2s, box-shadow .3s;
+      animation: fadeUp .22s ease both;
+    }
+    .desk.working {
+      border-color: var(--accent);
+      box-shadow: var(--glow-b);
+      animation: glow 2.5s infinite;
+    }
+    .desk.idle { opacity: .7; }
+
+    .desk-emoji { font-size: 26px; margin-bottom: 7px; display: block; line-height: 1; }
+    .desk-name  { font-weight: 700; font-size: 13px; margin-bottom: 1px; }
+    .desk-id    { font-size: 10px; color: var(--muted); font-family:monospace; margin-bottom: 9px; }
+
+    .desk-state {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 8px;
+    }
+    .desk-dot { width:6px; height:6px; border-radius:50%; }
+    .desk-dot.active { background:var(--accent); animation:pulse 1s infinite; }
+    .desk-dot.idle   { background:var(--green); }
+    .desk-dot.error  { background:var(--red); }
+    .desk-state-label { font-size:10px; color:var(--muted); }
+
+    .desk-task {
+      font-size: 11px;
+      color: var(--text);
+      background: var(--s2);
+      border-radius: 5px;
+      padding: 6px 8px;
+      margin-bottom: 8px;
+      min-height: 34px;
+      line-height: 1.5;
+      border: 1px solid var(--border);
+    }
+    .desk-footer { display:flex; justify-content:space-between; font-size:10px; color:var(--muted); }
+    .desk-model  { font-family:monospace; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:130px; }
+    .desk-cost   { color:var(--green); font-weight:700; }
+    .desk-history { margin-top:7px; border-top:1px solid var(--border); padding-top:7px; }
+    .desk-h-item { font-size:10px; color:var(--muted); padding:1px 0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .desk-h-item::before { content:'↳ '; color:var(--s3); }
+
+    /* ── DISPATCH view ───────────────────────────── */
+    #view-dispatch {
+      flex-direction: row;
+      gap: 1px;
+      background: var(--border);
+      overflow: hidden;
+    }
+
+    .dispatch-left {
+      width: 360px;
+      flex-shrink: 0;
+      background: var(--bg);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .dispatch-right {
+      flex: 1;
+      background: var(--bg);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .form-scroll { flex:1; overflow-y:auto; padding:14px; }
+    .form-section-label { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); margin-bottom:9px; }
+
+    .wf-btn {
+      width:100%;
+      background:var(--s1);
+      border:1px solid var(--border);
+      border-radius:7px;
+      padding:10px 12px;
+      margin-bottom:5px;
+      cursor:pointer;
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      transition:border-color .12s, background .12s;
+      color:var(--text);
+      text-align:left;
+    }
+    .wf-btn:hover  { border-color:var(--accent); background:var(--s2); }
+    .wf-btn.sel    { border-color:var(--accent); background:var(--s2); box-shadow:var(--glow-b); }
+    .wf-btn-name   { font-size:12px; font-weight:700; }
+    .wf-btn-desc   { font-size:10px; color:var(--muted); margin-top:1px; }
+    .wf-btn-arrow  { color:var(--muted); font-size:16px; flex-shrink:0; }
+
+    .field-group { margin-bottom:11px; }
+    .field-label { font-size:10px; font-weight:700; color:var(--muted); text-transform:uppercase; letter-spacing:.05em; margin-bottom:5px; display:block; }
+    .field-input, .field-ta {
+      width:100%;
+      background:var(--bg);
+      border:1px solid var(--border);
+      border-radius:5px;
+      padding:7px 10px;
+      color:var(--text);
+      font-size:12px;
+      outline:none;
+      font-family:inherit;
+      transition:border-color .15s;
+    }
+    .field-input:focus, .field-ta:focus { border-color:var(--accent); }
+    .field-ta { resize:vertical; min-height:80px; line-height:1.5; }
+
+    .dispatch-btn {
+      width:100%;
+      padding:11px;
+      background:linear-gradient(135deg, var(--accent), var(--purple));
+      color:#fff;
+      border:none;
+      border-radius:7px;
+      font-size:13px;
+      font-weight:700;
+      cursor:pointer;
+      margin-top:12px;
+      transition:opacity .12s, transform .1s;
+      letter-spacing:.02em;
+    }
+    .dispatch-btn:hover  { opacity:.9; }
+    .dispatch-btn:active { transform:scale(.98); }
+    .dispatch-btn:disabled { opacity:.4; cursor:not-allowed; }
+
+    .dlog-item {
+      display:flex;
+      gap:10px;
+      padding:8px 12px;
+      border-bottom:1px solid var(--border);
+      font-size:11px;
+      animation:fadeUp .15s ease both;
+    }
+    .dlog-item.success { border-left:3px solid var(--green); }
+    .dlog-item.error   { border-left:3px solid var(--red); }
+    .dlog-item.info    { border-left:3px solid var(--accent); }
+    .dlog-ts   { font-family:monospace; font-size:10px; color:var(--muted); flex-shrink:0; }
+    .dlog-text { flex:1; color:var(--text); }
+
+    /* ── Empty state ─────────────────────────────── */
+    .empty {
+      display:flex; flex-direction:column; align-items:center; justify-content:center;
+      height:100px; color:var(--muted); font-size:11px; gap:5px;
+    }
+    .empty-icon { font-size:22px; opacity:.3; }
+
+    /* ── Scrollbar universal ─────────────────────── */
+    * { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+
+    /* ── Pre-flight tab badge ────────────────────── */
+    .pf-badge-fail { background:var(--red); color:#fff; font-size:9px; font-weight:700; padding:1px 5px; border-radius:8px; margin-left:5px; }
+    .pf-badge-ok   { background:var(--green); color:#000; font-size:9px; font-weight:700; padding:1px 5px; border-radius:8px; margin-left:5px; }
+
+    /* ── Pre-flight view ─────────────────────────── */
+    #view-preflight {
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .pf-header {
+      padding: 14px 18px 10px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-shrink: 0;
+    }
+
+    .pf-title-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .pf-title { font-size: 15px; font-weight: 700; }
+    .pf-subtitle { font-size: 11px; color: var(--muted); }
+
+    .pf-summary-pills {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .pf-pill {
+      padding: 4px 12px;
+      border-radius: 20px;
+      font-size: 11px;
+      font-weight: 700;
+      border: 1px solid;
+    }
+    .pf-pill.pass  { border-color: var(--green); color: var(--green); background: rgba(61,214,140,.08); }
+    .pf-pill.fail  { border-color: var(--red);   color: var(--red);   background: rgba(232,85,85,.08); }
+    .pf-pill.idle  { border-color: var(--muted); color: var(--muted); background: transparent; }
+
+    .pf-actions {
+      display: flex;
+      gap: 8px;
+    }
+
+    .pf-btn {
+      padding: 6px 14px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 700;
+      border: 1px solid var(--border);
+      background: var(--s2);
+      color: var(--text);
+      cursor: pointer;
+      transition: border-color .12s, background .12s;
+      letter-spacing: .02em;
+    }
+    .pf-btn:hover { border-color: var(--accent); background: var(--s3); }
+    .pf-btn.primary {
+      background: linear-gradient(135deg, var(--accent), var(--purple));
+      border-color: transparent;
+      color: #fff;
+    }
+    .pf-btn.primary:hover { opacity: .88; }
+    .pf-btn:disabled { opacity: .4; cursor: not-allowed; }
+
+    .pf-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    /* ── Box card ────────────────────────────────── */
+    .pf-box-card {
+      background: var(--s1);
+      border: 1px solid var(--border);
+      border-radius: 9px;
+      overflow: hidden;
+      transition: border-color .15s;
+      animation: fadeUp .2s ease both;
+    }
+    .pf-box-card.pass { border-color: rgba(61,214,140,.4); }
+    .pf-box-card.fail { border-color: rgba(232,85,85,.4); }
+    .pf-box-card.running { border-color: rgba(91,141,238,.5); animation: glow 1.5s ease infinite; }
+
+    .pf-card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 14px;
+      cursor: pointer;
+      user-select: none;
+      background: var(--s2);
+    }
+    .pf-card-header:hover { background: var(--s3); }
+
+    .pf-card-left {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .pf-status-dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .pf-status-dot.pass    { background: var(--green); box-shadow: 0 0 6px var(--green); }
+    .pf-status-dot.fail    { background: var(--red);   box-shadow: 0 0 6px var(--red); }
+    .pf-status-dot.running { background: var(--accent); animation: pulse 1s ease infinite; }
+    .pf-status-dot.idle    { background: var(--border); }
+
+    .pf-box-name  { font-size: 12px; font-weight: 700; }
+    .pf-box-sub   { font-size: 10px; color: var(--muted); margin-top: 1px; }
+
+    .pf-card-right {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 11px;
+    }
+
+    .pf-score      { font-weight: 700; font-variant-numeric: tabular-nums; }
+    .pf-score.pass { color: var(--green); }
+    .pf-score.fail { color: var(--red); }
+    .pf-score.idle { color: var(--muted); }
+    .pf-dur        { color: var(--muted); font-size: 10px; }
+    .pf-chevron    { color: var(--muted); font-size: 12px; transition: transform .15s; }
+    .pf-chevron.open { transform: rotate(90deg); }
+
+    /* ── Test grid ───────────────────────────────── */
+    .pf-tests {
+      padding: 10px 14px 12px;
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+      gap: 6px;
+    }
+
+    .pf-test {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 8px;
+      background: var(--bg);
+      border-radius: 5px;
+      border: 1px solid var(--border);
+      font-size: 10px;
+    }
+
+    .pf-test-icon { font-size: 11px; flex-shrink: 0; }
+    .pf-test-name { color: var(--muted); flex: 1; }
+    .pf-test.pass .pf-test-name { color: var(--text); }
+    .pf-test.fail .pf-test-name { color: var(--red); }
+    .pf-test.running { border-color: var(--accent); }
+    .pf-test.running .pf-test-name { color: var(--accent); }
+    .pf-test-err { font-size: 9px; color: var(--red); margin-top: 2px; grid-column: 1/-1; }
+
+    /* ── Identity quote ──────────────────────────── */
+    .pf-identity {
+      padding: 0 14px 12px;
+      font-size: 11px;
+      color: var(--muted);
+      font-style: italic;
+      display: flex;
+      align-items: flex-start;
+      gap: 6px;
+    }
+    .pf-identity-icon { flex-shrink: 0; }
+
+    /* ── Progress bar ────────────────────────────── */
+    .pf-progress {
+      height: 3px;
+      background: var(--border);
+      border-radius: 2px;
+      overflow: hidden;
+      margin: 0 18px 4px;
+      flex-shrink: 0;
+    }
+    .pf-progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, var(--accent), var(--purple));
+      border-radius: 2px;
+      transition: width .3s ease;
+    }
+
+    /* ── Last run timestamp ──────────────────────── */
+    .pf-last-run { font-size: 10px; color: var(--muted); }
+
+    /* ── Error banner ────────────────────────────── */
+    .pf-error-banner {
+      background: rgba(232,85,85,.12);
+      border: 1px solid rgba(232,85,85,.3);
+      border-radius: 7px;
+      padding: 10px 14px;
+      font-size: 11px;
+      color: var(--red);
+      margin-bottom: 4px;
+    }
+  </style>
+</head>
+<body x-data x-init="initApp()">
+
+<!-- ─── Header ──────────────────────────────────── -->
+<header>
+  <div class="logo">
+    <span>🧶</span>
+    <span>CozyEmployee</span>
+    <span class="logo-badge">Mission Control</span>
+  </div>
+
+  <div class="tabs">
+    <button class="tab" :class="{ active: $store.ui.tab === 'dispatch' }" @click="$store.ui.tab='dispatch'">🚀 Dispatch</button>
+    <button class="tab" :class="{ active: $store.ui.tab === 'ops' }"      @click="$store.ui.tab='ops'">⚡ Ops</button>
+    <button class="tab" :class="{ active: $store.ui.tab === 'floor' }"    @click="$store.ui.tab='floor'">🏢 Floor</button>
+    <button class="tab" :class="{ active: $store.ui.tab === 'preflight' }" @click="$store.ui.tab='preflight'; $store.preflight.maybeAutoRun()">
+      🔍 Pre-flight
+      <span x-show="$store.preflight.failCount > 0" class="pf-badge-fail" x-text="$store.preflight.failCount + ' fail'"></span>
+      <span x-show="$store.preflight.failCount === 0 && $store.preflight.lastRun" class="pf-badge-ok">✓ ready</span>
+    </button>
+  </div>
+
+  <div class="conn">
+    <div class="conn-dot" :class="$store.ui.connState" id="conn-dot"></div>
+    <span x-text="$store.ui.connState === 'connected' ? 'Live' : $store.ui.connState === 'connecting' ? 'Connecting…' : 'Disconnected'"></span>
+  </div>
+</header>
+
+<!-- ─── Stats strip ──────────────────────────────── -->
+<div class="stats-strip">
+  <template x-for="s in $store.stats.cells" :key="s.id">
+    <div class="stat-cell">
+      <div class="stat-icon" :class="s.color" x-text="s.icon"></div>
+      <div class="stat-body">
+        <div class="stat-val" :class="s.color" x-text="s.val" :key="s.val"></div>
+        <div class="stat-label" x-text="s.label"></div>
+      </div>
+    </div>
+  </template>
+</div>
+
+<!-- ─── Views ────────────────────────────────────── -->
+
+<!-- OPS ───────────────────────────────────────────── -->
+<div class="view" :class="{ active: $store.ui.tab === 'ops' }" id="view-ops">
+  <div class="ops-top">
+
+    <!-- Workflows -->
+    <div class="panel" style="width:280px;flex-shrink:0">
+      <div class="ph">
+        <span class="ph-title">⚡ Workflows</span>
+        <span class="ph-badge" x-text="Object.keys($store.workflows).length"></span>
+      </div>
+      <div class="pb">
+        <template x-if="Object.keys($store.workflows).length === 0">
+          <div class="empty"><div class="empty-icon">⏳</div>Waiting for workflows…</div>
+        </template>
+        <template x-for="wf in Object.values($store.workflows).sort((a,b)=>b.ts-a.ts)" :key="wf.id">
+          <div class="wf-card" :class="{ sel: $store.ui.watchedRunId === wf.id }" @click="watchRun(wf.id)">
+            <div class="wf-top">
+              <span class="wf-id" x-text="shortId(wf.id)"></span>
+              <span class="wf-badge" :class="'b-' + wf.status">
+                <span class="wf-dot"></span>
+                <span x-text="wf.status === 'waiting' ? 'approval' : wf.status"></span>
+                <span class="wf-dur" x-text="wf.dur"></span>
+              </span>
+            </div>
+            <div class="wf-meta" x-text="wf.meta" x-show="wf.meta"></div>
+            <div class="wf-steps">
+              <template x-for="[step, status] in Object.entries(wf.steps || {})" :key="step">
+                <span class="step-pill" :class="status" x-text="step"></span>
+              </template>
+            </div>
+          </div>
+        </template>
+      </div>
+    </div>
+
+    <!-- xterm.js Log Terminal -->
+    <div class="panel" style="flex:1">
+      <div class="ph">
+        <span class="ph-title">📡 Event Stream</span>
+        <div style="display:flex;gap:6px;align-items:center">
+          <span class="ph-badge" x-text="$store.ui.eventCount + ' events'"></span>
+          <button class="btn-xs ghost" style="padding:2px 8px;font-size:9px" @click="clearTerminal()">Clear</button>
+        </div>
+      </div>
+      <div class="watch-bar">
+        <input class="watch-input" id="watch-input" placeholder="Watch run ID…" @keydown.enter="watchRun($el.value.trim())" />
+        <button class="btn-xs" @click="watchRun(document.getElementById('watch-input').value.trim())" id="watch-btn">Watch</button>
+      </div>
+      <div id="terminal-container"></div>
+    </div>
+
+    <!-- Approvals -->
+    <div class="panel" style="width:320px;flex-shrink:0">
+      <div class="ph">
+        <span class="ph-title">🔐 Approvals</span>
+        <span class="ph-badge" :class="Object.keys($store.approvals).length > 0 ? 'badge-danger' : ''" x-text="Object.keys($store.approvals).length" style="transition:.2s"></span>
+      </div>
+      <div class="pb">
+        <template x-if="Object.keys($store.approvals).length === 0">
+          <div class="empty"><div class="empty-icon">✅</div>No pending approvals</div>
+        </template>
+        <template x-for="a in Object.values($store.approvals)" :key="a.tool_call_id">
+          <div class="appr-card" :id="'appr-' + a.tool_call_id">
+            <span class="risk-pill" :class="'r-' + (a.risk_level || 'medium')" x-text="'⚠ ' + (a.risk_level || 'medium') + ' risk'"></span>
+            <div class="appr-tool" x-text="a.tool"></div>
+            <div class="appr-run" x-text="'run: ' + shortId(a.run_id)"></div>
+            <div class="appr-ctx" x-text="a.context" x-show="a.context"></div>
+            <div class="appr-args" x-text="JSON.stringify(a.args, null, 2)"></div>
+            <div class="appr-btns">
+              <button class="btn-approve" @click="resolveApproval(a.tool_call_id, a.run_id, true)">✓ Approve</button>
+              <button class="btn-reject"  @click="resolveApproval(a.tool_call_id, a.run_id, false)">✕ Reject</button>
+            </div>
+          </div>
+        </template>
+      </div>
+    </div>
+
+  </div><!-- ops-top -->
+
+  <!-- Charts row -->
+  <div class="ops-bottom">
+    <div class="chart-panel" style="flex:2">
+      <div class="ph"><span class="ph-title">📈 Workflow Activity</span></div>
+      <div style="flex:1;padding:8px;min-height:0;overflow:hidden">
+        <canvas id="chart-activity"></canvas>
+      </div>
+    </div>
+    <div class="chart-panel" style="flex:1">
+      <div class="ph"><span class="ph-title">🧠 DPN Calls / min</span></div>
+      <div style="flex:1;padding:8px;min-height:0;overflow:hidden">
+        <canvas id="chart-dpn"></canvas>
+      </div>
+    </div>
+    <div class="chart-panel" style="flex:1">
+      <div class="ph"><span class="ph-title">⚡ Step Rate</span></div>
+      <div style="flex:1;padding:8px;min-height:0;overflow:hidden">
+        <canvas id="chart-steps"></canvas>
+      </div>
+    </div>
+  </div>
+
+</div><!-- view-ops -->
+
+<!-- FLOOR ─────────────────────────────────────────── -->
+<div class="view" :class="{ active: $store.ui.tab === 'floor' }" id="view-floor">
+  <div class="floor-grid">
+    <template x-if="Object.keys($store.dpns).length === 0">
+      <div style="grid-column:1/-1" class="empty">
+        <div class="empty-icon">🏢</div>
+        <span>DPN desks appear as agents are commissioned</span>
+      </div>
+    </template>
+    <template x-for="d in Object.values($store.dpns).sort((a,b)=>(b.status==='active'?1:0)-(a.status==='active'?1:0))" :key="d.id">
+      <div class="desk" :class="d.status === 'active' ? 'working' : 'idle'">
+        <span class="desk-emoji" x-text="d.emoji"></span>
+        <div class="desk-name" x-text="d.name"></div>
+        <div class="desk-id" x-text="d.id"></div>
+        <div class="desk-state">
+          <div class="desk-dot" :class="d.status"></div>
+          <span class="desk-state-label" x-text="d.status === 'active' ? 'Working…' : 'Idle'"></span>
+        </div>
+        <div class="desk-task">
+          <span x-show="d.currentTask" x-text="d.currentTask"></span>
+          <span x-show="!d.currentTask" style="color:var(--muted);font-style:italic">Waiting for task</span>
+        </div>
+        <div class="desk-footer">
+          <span class="desk-model" x-text="d.model || '—'"></span>
+          <span class="desk-cost" x-show="d.totalCost" x-text="'$' + d.totalCost.toFixed(4)"></span>
+        </div>
+        <div class="desk-history" x-show="d.history && d.history.length > 0">
+          <template x-for="h in d.history" :key="h">
+            <div class="desk-h-item" x-text="h"></div>
+          </template>
+        </div>
+      </div>
+    </template>
+  </div>
+</div>
+
+<!-- DISPATCH ───────────────────────────────────────── -->
+<div class="view" :class="{ active: $store.ui.tab === 'dispatch' }" id="view-dispatch">
+
+  <div class="dispatch-left">
+    <div class="ph"><span class="ph-title">🚀 Dispatch Workflow</span></div>
+    <div class="form-scroll">
+      <div style="margin-bottom:16px">
+        <div class="form-section-label">Choose workflow</div>
+        <button class="wf-btn" :class="{ sel: $store.dispatch.selected === 'research' }"      @click="$store.dispatch.selected='research'">
+          <div><div class="wf-btn-name">🔬 Research</div><div class="wf-btn-desc">Commission a Box DPN to research a topic</div></div>
+          <span class="wf-btn-arrow">›</span>
+        </button>
+        <button class="wf-btn" :class="{ sel: $store.dispatch.selected === 'parallel-brain' }" @click="$store.dispatch.selected='parallel-brain'">
+          <div><div class="wf-btn-name">🧠 Parallel Brain</div><div class="wf-btn-desc">3 expert DPNs + synthesizer Box</div></div>
+          <span class="wf-btn-arrow">›</span>
+        </button>
+        <button class="wf-btn" :class="{ sel: $store.dispatch.selected === 'knowledge-builder' }" @click="$store.dispatch.selected='knowledge-builder'">
+          <div><div class="wf-btn-name">📚 Knowledge Builder</div><div class="wf-btn-desc">Extract patterns from recent activity</div></div>
+          <span class="wf-btn-arrow">›</span>
+        </button>
+      </div>
+
+      <!-- Dynamic fields -->
+      <div>
+        <div class="form-section-label">Parameters</div>
+        <div style="background:var(--s1);border:1px solid var(--border);border-radius:7px;padding:12px;">
+
+          <template x-if="$store.dispatch.selected === 'research'">
+            <div class="field-group">
+              <label class="field-label">Research Topic</label>
+              <textarea class="field-ta" id="f-topic" placeholder="e.g. Ably LiveObjects conflict resolution patterns in distributed systems"></textarea>
+            </div>
+          </template>
+
+          <template x-if="$store.dispatch.selected === 'parallel-brain'">
+            <div class="field-group">
+              <label class="field-label">Problem to Analyze</label>
+              <textarea class="field-ta" id="f-problem" placeholder="e.g. Optimal memory architecture for multi-agent CozyEmployee systems"></textarea>
+            </div>
+          </template>
+
+          <template x-if="$store.dispatch.selected === 'knowledge-builder'">
+            <div class="field-group">
+              <label class="field-label">Timeframe</label>
+              <input class="field-input" id="f-timeframe" value="24h" placeholder="24h" />
+            </div>
+          </template>
+
+        </div>
+      </div>
+
+      <button class="dispatch-btn" :disabled="$store.dispatch.loading" @click="dispatch()">
+        <span x-show="!$store.dispatch.loading">🚀 Dispatch</span>
+        <span x-show="$store.dispatch.loading">⏳ Dispatching…</span>
+      </button>
+    </div>
+  </div>
+
+  <div class="dispatch-right">
+    <div class="ph">
+      <span class="ph-title">📋 Dispatch Log</span>
+      <button class="btn-xs ghost" style="padding:2px 8px;font-size:9px" @click="$store.dispatch.log = []">Clear</button>
+    </div>
+    <div class="pb">
+      <template x-if="$store.dispatch.log.length === 0">
+        <div class="empty"><div class="empty-icon">🚀</div>Dispatched runs appear here</div>
+      </template>
+      <template x-for="entry in $store.dispatch.log" :key="entry.ts">
+        <div class="dlog-item" :class="entry.type">
+          <span class="dlog-ts" x-text="entry.time"></span>
+          <span class="dlog-text" x-text="entry.text"></span>
+        </div>
+      </template>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// ────────────────────────────────────────────────────────────────────────────
+// ALPINE STORES  — single source of truth, fully reactive
+// ────────────────────────────────────────────────────────────────────────────
+document.addEventListener('alpine:init', () => {
+
+  Alpine.store('ui', {
+    tab:          'dispatch',
+    connState:    'connecting',
+    watchedRunId: null,
+    eventCount:   0,
+  });
+
+  Alpine.store('stats', {
+    cells: [
+      { id:'active',     icon:'⚡', color:'blue',   label:'Active',       val: 0 },
+      { id:'completed',  icon:'✓',  color:'green',  label:'Completed',    val: 0 },
+      { id:'approvals',  icon:'⚠',  color:'amber',  label:'Approvals',    val: 0 },
+      { id:'dpn',        icon:'🧠', color:'purple', label:'DPN Calls',    val: 0 },
+      { id:'failed',     icon:'✕',  color:'red',    label:'Failures',     val: 0 },
+      { id:'desks',      icon:'🏢', color:'teal',   label:'DPNs Working', val: 0 },
+    ],
+    inc(id, by = 1) {
+      const c = this.cells.find(c => c.id === id);
+      if (c) c.val = Math.max(0, c.val + by);
+    },
+    set(id, val) {
+      const c = this.cells.find(c => c.id === id);
+      if (c) c.val = val;
+    },
+  });
+
+  Alpine.store('workflows', {});    // runId → wf object
+  Alpine.store('approvals', {});    // toolCallId → approval
+  Alpine.store('dpns', {});         // nodeId → desk
+
+  Alpine.store('dispatch', {
+    selected: 'research',
+    loading:  false,
+    log:      [],
+    push(type, text) {
+      this.log.unshift({ type, text, time: new Date().toLocaleTimeString('en-US',{hour12:false}), ts: Date.now() });
+      if (this.log.length > 200) this.log.pop();
+    },
+  });
+
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// GLOBALS
+// ────────────────────────────────────────────────────────────────────────────
+const SERVER = window.location.origin;
+
+let ably        = null;
+let term        = null;   // xterm.js instance
+let fitAddon    = null;
+let watchedCh   = null;
+let watchingId  = null;
+
+const seenIds   = new Set();
+const tokenBubbles = new Map(); // responseId → text so far
+
+// Chart.js instances
+let chartActivity = null;
+let chartDPN      = null;
+let chartSteps    = null;
+
+// Rolling 60-point windows
+const WINDOW = 60;
+const timeLabels   = Array(WINDOW).fill('');
+const actStarted   = Array(WINDOW).fill(0);
+const actCompleted = Array(WINDOW).fill(0);
+const dpnRate      = Array(WINDOW).fill(0);
+const stepRate     = Array(WINDOW).fill(0);
+
+// Tick accumulators (reset each second)
+let tickDPN   = 0;
+let tickSteps = 0;
+
+// Duration ticker
+let durTick = null;
+
+// ────────────────────────────────────────────────────────────────────────────
+// INIT
+// ────────────────────────────────────────────────────────────────────────────
+function initApp() {
+  initTerminal();
+  initCharts();
+  connectAbly();
+  startTickers();
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// XTERM.JS TERMINAL
+// ────────────────────────────────────────────────────────────────────────────
+function initTerminal() {
+  term = new Terminal({
+    fontFamily: '"JetBrains Mono","Fira Code","Cascadia Code",monospace',
+    fontSize: 11,
+    lineHeight: 1.35,
+    theme: {
+      background:  '#0a0c10',
+      foreground:  '#dde1eb',
+      cursor:      '#5b8dee',
+      selection:   'rgba(91,141,238,0.25)',
+      black:       '#252a38',
+      brightBlack: '#556080',
+      blue:        '#5b8dee',
+      brightBlue:  '#7ba7f7',
+      green:       '#3dd68c',
+      brightGreen: '#5ee8a4',
+      yellow:      '#f5a623',
+      red:         '#e85555',
+      cyan:        '#2dd4bf',
+      magenta:     '#9b72f8',
+      white:       '#dde1eb',
+      brightWhite: '#f0f4ff',
+    },
+    scrollback: 2000,
+    convertEol: true,
+    cursorBlink: false,
+    disableStdin: true,
+  });
+
+  fitAddon = new FitAddon.FitAddon();
+  term.loadAddon(fitAddon);
+  term.open(document.getElementById('terminal-container'));
+  setTimeout(() => { try { fitAddon.fit(); } catch(e) {} }, 100);
+
+  window.addEventListener('resize', () => { try { fitAddon.fit(); } catch(e) {} });
+
+  term.writeln('\x1b[38;5;240m─── CozyEmployee Event Stream ─────────────────────────────\x1b[0m');
+  term.writeln('\x1b[38;5;240mPaste a run ID above and click Watch, or events flow live.\x1b[0m');
+  term.writeln('');
+}
+
+// ANSI color helpers
+const C = {
+  reset:   '\x1b[0m',
+  dim:     '\x1b[2m',
+  bold:    '\x1b[1m',
+  blue:    '\x1b[38;5;111m',
+  green:   '\x1b[38;5;114m',
+  amber:   '\x1b[38;5;221m',
+  red:     '\x1b[38;5;203m',
+  purple:  '\x1b[38;5;141m',
+  cyan:    '\x1b[38;5;86m',
+  gray:    '\x1b[38;5;240m',
+  muted:   '\x1b[38;5;245m',
+};
+
+function eventColor(name) {
+  if (name.startsWith('workflow.')) return C.blue;
+  if (name === 'step')              return C.cyan;
+  if (name === 'tool_call')         return C.amber;
+  if (name === 'tool_result')       return C.green;
+  if (name === 'approval-request')  return C.red;
+  if (name.startsWith('dpn.'))      return C.purple;
+  return C.muted;
+}
+
+function writeEvent(msg) {
+  if (!term) return;
+  const { name, data } = msg;
+  const ts  = new Date(msg.timestamp || Date.now()).toLocaleTimeString('en-US', {hour12:false});
+  const col = eventColor(name);
+  const ds  = fmtData(data);
+
+  // Token streaming — accumulate into a single "DPN thinking" line
+  if (name === 'token' && msg.extras?.headers?.responseId) {
+    const rid = msg.extras.headers.responseId;
+    const nodeId = rid.split(':').pop() || 'dpn';
+    if (!tokenBubbles.has(rid)) {
+      tokenBubbles.set(rid, '');
+      term.writeln(`${C.gray}${ts}${C.reset}  ${C.purple}[${nodeId}]${C.reset} ${C.dim}thinking…${C.reset}`);
+    }
+    const prev = tokenBubbles.get(rid);
+    const next = prev + (data?.delta || '');
+    tokenBubbles.set(rid, next);
+    // Rewrite the last line with accumulated text (move cursor up, clear, rewrite)
+    const preview = next.length > 120 ? '…' + next.slice(-118) : next;
+    term.write(`\x1b[1A\r\x1b[2K${C.gray}${ts}${C.reset}  ${C.purple}[${nodeId}]${C.reset} ${C.dim}${escTerminal(preview)}${C.reset}\n`);
+    return;
+  }
+
+  if (name === 'dpn.complete') {
+    const rid = msg.extras?.headers?.responseId;
+    if (rid) tokenBubbles.delete(rid);
+  }
+
+  // Standard event line
+  term.writeln(`${C.gray}${ts}${C.reset}  ${col}${C.bold}${name}${C.reset}  ${C.muted}${ds}${C.reset}`);
+  Alpine.store('ui').eventCount++;
+}
+
+function clearTerminal() {
+  if (term) { term.clear(); tokenBubbles.clear(); }
+  Alpine.store('ui').eventCount = 0;
+}
+
+function escTerminal(s) {
+  return String(s || '').replace(/\x1b/g, '').replace(/[\r\n]/g, ' ');
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// CHART.JS — streaming line charts, animation disabled for perf
+// ────────────────────────────────────────────────────────────────────────────
+const CHART_OPTS = {
+  responsive: true,
+  maintainAspectRatio: false,
+  animation: false,    // Context7 confirmed: 'false' is the key for streaming perf
+  plugins: { legend: { display: false }, tooltip: { enabled: false } },
+  scales: {
+    x: { display: false },
+    y: {
+      display: true,
+      grid: { color: 'rgba(37,42,56,.6)' },
+      ticks: { color: '#556080', font: { size: 10 }, maxTicksLimit: 4 },
+      min: 0,
+    },
+  },
+  elements: {
+    line:  { tension: 0.4, borderWidth: 1.5 },
+    point: { radius: 0, hoverRadius: 3 },
+  },
+};
+
+function makeChart(id, color, label, fill) {
+  const ctx = document.getElementById(id).getContext('2d');
+  return new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: [...timeLabels],
+      datasets: [{
+        label,
+        data: Array(WINDOW).fill(0),
+        borderColor: color,
+        backgroundColor: fill,
+        fill: true,
+      }],
+    },
+    options: { ...CHART_OPTS, scales: { ...CHART_OPTS.scales, y: { ...CHART_OPTS.scales.y } } },
+  });
+}
+
+function initCharts() {
+  // Wait for DOM to be painted (Alpine needs a tick first)
+  setTimeout(() => {
+    chartActivity = makeChart('chart-activity', '#5b8dee', 'Workflows', 'rgba(91,141,238,.08)');
+    chartDPN      = makeChart('chart-dpn',      '#9b72f8', 'DPN/min',   'rgba(155,114,248,.08)');
+    chartSteps    = makeChart('chart-steps',    '#3dd68c', 'Steps/min', 'rgba(61,214,140,.08)');
+  }, 50);
+}
+
+// Push one data point to a chart, maintaining rolling window
+// Context7 pattern: push + shift = rolling window, update('none') = no animation jank
+function pushChart(chart, val) {
+  if (!chart) return;
+  chart.data.labels.push('');
+  chart.data.labels.shift();
+  chart.data.datasets[0].data.push(val);
+  chart.data.datasets[0].data.shift();
+  chart.update('none');  // Context7: 'none' = instant update, zero CPU overhead
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// TICKERS
+// ────────────────────────────────────────────────────────────────────────────
+function startTickers() {
+  // Every second: flush accumulated counts to charts + update durations
+  setInterval(() => {
+    pushChart(chartDPN,   tickDPN);
+    pushChart(chartSteps, tickSteps);
+    tickDPN = tickSteps = 0;
+
+    // Update live durations on workflow cards
+    const now = Date.now();
+    const wfs = Alpine.store('workflows');
+    Object.values(wfs).forEach(wf => {
+      if (wf.status === 'running' && wf.startedAt) {
+        wf.dur = ((now - wf.startedAt) / 1000).toFixed(0) + 's';
+      }
+    });
+  }, 1000);
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// ABLY CONNECTION
+// ────────────────────────────────────────────────────────────────────────────
+async function connectAbly() {
+  const clientId = `ops_${Date.now()}`;
+  try {
+    const probe = await fetch(`${SERVER}/ably/token/global?role=operator&clientId=${clientId}`);
+    let opts;
+    if (probe.ok) {
+      opts = { authUrl: `${SERVER}/ably/token/global`, authMethod: 'GET', authParams: { role:'operator', clientId } };
+    } else {
+      const key = prompt('Ably API key:');
+      if (!key) { Alpine.store('ui').connState = 'failed'; return; }
+      opts = { key };
+    }
+
+    ably = new Ably.Realtime({ ...opts, clientId, recover: (_, cb) => cb(true) });
+    ably.connection.on('connected',    () => Alpine.store('ui').connState = 'connected');
+    ably.connection.on('disconnected', () => Alpine.store('ui').connState = 'connecting');
+    ably.connection.on('failed',       () => Alpine.store('ui').connState = 'failed');
+    ably.connection.once('connected', subscribeToMesh);
+
+  } catch(e) {
+    const key = prompt('Connection error. API key:');
+    if (key) {
+      ably = new Ably.Realtime({ key, recover:(_, cb)=>cb(true) });
+      ably.connection.once('connected', () => { Alpine.store('ui').connState='connected'; subscribeToMesh(); });
+    }
+  }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// MESH SUBSCRIPTIONS — subscribe first, then history(untilAttach)
+// ────────────────────────────────────────────────────────────────────────────
+async function subscribeToMesh() {
+  const hCh = ably.channels.get('mesh:health');
+  hCh.subscribe(m => onHealth(m));
+  initPreflightAbly(hCh); // wire preflight live events to the pre-flight store
+  try {
+    const h = await hCh.history({ untilAttach: true, limit: 50 });
+    [...h.items].reverse().forEach(m => onHealth(m, true));
+  } catch(e) { console.warn('health hist:', e.message); }
+  hCh.on('attached', sc => {
+    if (sc.resumed === false) hCh.history({ untilAttach:true, limit:50 })
+      .then(h => [...h.items].reverse().forEach(m => onHealth(m, true)))
+      .catch(() => {});
+  });
+
+  const aCh = ably.channels.get('mesh:approvals');
+  aCh.subscribe(m => onApproval(m));
+  try {
+    const h = await aCh.history({ untilAttach: true, limit: 20 });
+    [...h.items].reverse().forEach(m => onApproval(m, true));
+  } catch(e) { console.warn('approvals hist:', e.message); }
+  aCh.on('attached', sc => {
+    if (sc.resumed === false) aCh.history({ untilAttach:true, limit:20 })
+      .then(h => [...h.items].reverse().forEach(m => onApproval(m, true)))
+      .catch(() => {});
+  });
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// SEEN DEDUP
+// ────────────────────────────────────────────────────────────────────────────
+function seen(msg) {
+  if (!msg.id) return false;
+  if (seenIds.has(msg.id)) return true;
+  seenIds.add(msg.id);
+  if (seenIds.size > 3000) seenIds.delete(seenIds.values().next().value);
+  return false;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// HEALTH EVENT HANDLER
+// ────────────────────────────────────────────────────────────────────────────
+function onHealth(msg, fromHistory = false) {
+  if (seen(msg)) return;
+  const { name, data } = msg;
+  const stats     = Alpine.store('stats');
+  const workflows = Alpine.store('workflows');
+  const dpns      = Alpine.store('dpns');
+
+  if (name === 'workflow.started') {
+    const ex = workflows[data.run_id] || {};
+    workflows[data.run_id] = { id:data.run_id, type:data.type||'workflow', status:'running', steps:ex.steps||{}, meta:(data.topic||data.problem||data.type||'').slice(0,55), ts:data.ts||Date.now(), startedAt:data.ts, dur:'' };
+    stats.inc('active');
+    if (!fromHistory) { pushChart(chartActivity, stats.cells.find(c=>c.id==='active').val); writeEvent(msg); }
+  }
+  else if (name === 'workflow.completed') {
+    const wf = workflows[data.run_id];
+    if (wf) { wf.status='completed'; wf.completedAt=data.ts; wf.dur = wf.startedAt ? ((data.ts-wf.startedAt)/1000).toFixed(1)+'s' : ''; }
+    stats.inc('active', -1);
+    stats.inc('completed');
+    if (!fromHistory) { pushChart(chartActivity, stats.cells.find(c=>c.id==='completed').val); writeEvent(msg); }
+  }
+  else if (name === 'step.failed') {
+    const wf = workflows[data.run_id];
+    if (wf) wf.status = 'failed';
+    stats.inc('failed');
+    if (!fromHistory) writeEvent(msg);
+  }
+  else if (name === 'dpn.called') {
+    stats.inc('dpn');
+    tickDPN++;
+    updateDesk(data.run_id, data.node_id, data.model, 'active');
+    if (!fromHistory) writeEvent(msg);
+  }
+  else if (name === 'dpn.completed') {
+    updateDesk(data.run_id, data.node_id, null, 'idle', data.cost);
+    if (!fromHistory) writeEvent(msg);
+  }
+  else if (name === 'approval.pending')  stats.inc('approvals');
+  else if (name === 'approval.resolved') stats.inc('approvals', -1);
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// APPROVAL HANDLER
+// ────────────────────────────────────────────────────────────────────────────
+function onApproval(msg, fromHistory = false) {
+  if (seen(msg)) return;
+  const { name, data } = msg;
+  if (name !== 'approval-request') return;
+  Alpine.store('approvals')[data.tool_call_id] = data;
+  if (!fromHistory) {
+    Alpine.store('stats').inc('approvals');
+    writeEvent(msg);
+  }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// WORKFLOW CHANNEL HANDLER
+// ────────────────────────────────────────────────────────────────────────────
+function onWorkflow(msg, fromHistory = false) {
+  if (seen(msg)) return;
+  const { name, data } = msg;
+  const workflows = Alpine.store('workflows');
+
+  if (name === 'step') {
+    const wf = workflows[data.run_id];
+    if (wf) {
+      if (!wf.steps) wf.steps = {};
+      wf.steps[data.step] = data.status || 'completed';
+      tickSteps++;
+    }
+  }
+  if (name === 'approval-request') {
+    onApproval(msg, fromHistory);
+    const wf = workflows[data.run_id];
+    if (wf && wf.status === 'running') wf.status = 'waiting';
+  }
+
+  writeEvent(msg);
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// WATCH A RUN — subscribe + history(untilAttach) pattern
+// ────────────────────────────────────────────────────────────────────────────
+async function watchRun(runId) {
+  if (!runId || !ably || watchingId === runId) return;
+  watchingId = runId;
+  Alpine.store('ui').watchedRunId = runId;
+  document.getElementById('watch-input').value = runId;
+
+  // Detach previous channel
+  if (watchedCh) { try { watchedCh.unsubscribe(); watchedCh.detach(); } catch(e) {} }
+
+  clearTerminal();
+  term.writeln(`${C.blue}Watching run: ${runId}${C.reset}`);
+  term.writeln(`${C.gray}Loading history…${C.reset}`);
+
+  watchedCh = ably.channels.get(`workflow:${runId}`);
+
+  // Subscribe first, then history(untilAttach) — guaranteed zero gap
+  watchedCh.subscribe(m => onWorkflow(m));
+  try {
+    const hist = await watchedCh.history({ untilAttach: true, limit: 100 });
+    clearTerminal();
+    term.writeln(`${C.blue}● Watching: ${runId}${C.reset}  ${C.gray}(${hist.items.length} historical events)${C.reset}`);
+    term.writeln(`${C.gray}──────────────────────────────────────────────────────────${C.reset}`);
+    [...hist.items].reverse().forEach(m => onWorkflow(m, true));
+  } catch(e) {
+    term.writeln(`${C.red}History load failed: ${e.message}${C.reset}`);
+  }
+
+  watchedCh.on('attached', async sc => {
+    if (sc.resumed === false && Alpine.store('ui').watchedRunId === runId) {
+      term.writeln(`${C.amber}⚠ Gap detected — reloading history${C.reset}`);
+      try {
+        const h = await watchedCh.history({ untilAttach:true, limit:100 });
+        clearTerminal();
+        [...h.items].reverse().forEach(m => onWorkflow(m, true));
+      } catch(e) {}
+    }
+  });
+
+  watchingId = null;
+
+  // Flash watch button
+  const btn = document.getElementById('watch-btn');
+  if (btn) {
+    btn.textContent = '✓ Watching';
+    btn.style.background = 'var(--green)';
+    btn.style.color = '#000';
+    setTimeout(() => { btn.textContent='Watch'; btn.style.background=''; btn.style.color=''; }, 2000);
+  }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// DPN DESK MANAGEMENT
+// ────────────────────────────────────────────────────────────────────────────
+const DPN_META = {
+  researcher:          { emoji:'🔬', name:'Researcher' },
+  engineer:            { emoji:'⚙️',  name:'Engineer' },
+  architect:           { emoji:'🏗️',  name:'Architect' },
+  security:            { emoji:'🔒', name:'Security Expert' },
+  synthesizer:         { emoji:'🧪', name:'Synthesizer' },
+  'pattern-extractor': { emoji:'🔍', name:'Pattern Extractor' },
+  box:                 { emoji:'📦', name:'Box Agent' },
+};
+
+function updateDesk(runId, nodeId, model, status, cost) {
+  const dpns    = Alpine.store('dpns');
+  const stats   = Alpine.store('stats');
+  const persona = DPN_META[nodeId] || { emoji:'🤖', name: nodeId };
+  const ex      = dpns[nodeId] || { id:nodeId, name:persona.name, emoji:persona.emoji, status:'idle', model:'—', currentTask:null, totalCost:0, runCount:0, history:[] };
+
+  if (model) ex.model = model;
+
+  if (status === 'active') {
+    ex.status = 'active';
+    ex.currentTask = `Run ${shortId(runId)}`;
+    ex.runCount++;
+  } else if (status === 'idle') {
+    ex.status = 'idle';
+    if (cost) ex.totalCost = (ex.totalCost || 0) + cost;
+    if (ex.currentTask) {
+      ex.history = [ex.currentTask, ...ex.history].slice(0, 3);
+      ex.currentTask = null;
+    }
+  }
+
+  dpns[nodeId] = ex;
+  const activeCount = Object.values(dpns).filter(d => d.status === 'active').length;
+  stats.set('desks', activeCount);
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// DISPATCH
+// ────────────────────────────────────────────────────────────────────────────
+async function dispatch() {
+  const store  = Alpine.store('dispatch');
+  const name   = store.selected;
+  store.loading = true;
+
+  const body = { run_id: `${name}_${Date.now()}` };
+
+  const fieldMap = {
+    'research':         [['f-topic',    'topic']],
+    'parallel-brain':   [['f-problem',  'problem']],
+    'knowledge-builder':[['f-timeframe','timeframe']],
+  };
+
+  for (const [elId, key] of (fieldMap[name] || [])) {
+    const el  = document.getElementById(elId);
+    const val = el ? el.value.trim() : '';
+    if (!val && key !== 'timeframe') {
+      if (el) { el.style.borderColor='var(--red)'; setTimeout(()=>el.style.borderColor='',2000); }
+      store.loading = false;
+      return;
+    }
+    body[key] = val || '24h';
+  }
+
+  try {
+    const res = await fetch(`${SERVER}/api/trigger/${name}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      store.push('success', `✓ Dispatched ${name} — run: ${body.run_id}`);
+      store.push('info', `  messageId: ${(data.messageId||'?').slice(0,30)}…`);
+
+      // Switch to ops and auto-watch
+      Alpine.store('ui').tab = 'ops';
+      setTimeout(() => watchRun(body.run_id), 300);
+    } else {
+      const err = await res.text();
+      store.push('error', `✗ ${res.status}: ${err.slice(0,100)}`);
+    }
+  } catch(e) {
+    store.push('error', `✗ Network: ${e.message}`);
+  } finally {
+    store.loading = false;
+  }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// APPROVALS
+// ────────────────────────────────────────────────────────────────────────────
+async function resolveApproval(toolCallId, runId, approved) {
+  try {
+    const res = await fetch(`${SERVER}/ably/webhook`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items: [{ messages: [{ name:'approval-response', data:{ run_id:runId, tool_call_id:toolCallId, approved, approved_by:'ops_dashboard' } }] }] }),
+    });
+    if (res.ok) {
+      delete Alpine.store('approvals')[toolCallId];
+      const wf = Alpine.store('workflows')[runId];
+      if (wf && wf.status === 'waiting') wf.status = 'running';
+    }
+  } catch(e) { console.error('resolveApproval:', e.message); }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// HELPERS
+// ────────────────────────────────────────────────────────────────────────────
+function shortId(id) {
+  if (!id) return '—';
+  const p = id.split('_');
+  if (p.length >= 2 && p[p.length-1].length > 6)
+    return p.slice(0,-1).join('_')+'_…'+p[p.length-1].slice(-4);
+  return id.length > 20 ? id.slice(0,10)+'…'+id.slice(-5) : id;
+}
+
+function fmtData(d) {
+  if (!d) return '';
+  const s = typeof d==='string' ? d : JSON.stringify(d);
+  return escTerminal(s.length > 160 ? s.slice(0,160)+'…' : s);
+}
+</script>
+
+<!-- ─────────────────────────────────────────────────────────────────────────
+     PRE-FLIGHT VIEW
+────────────────────────────────────────────────────────────────────────────-->
+<div class="view" :class="{ active: $store.ui.tab === 'preflight' }" id="view-preflight">
+
+  <!-- Header -->
+  <div class="pf-header">
+    <div class="pf-title-row">
+      <div>
+        <div class="pf-title">🔍 Mesh Pre-flight</div>
+        <div class="pf-subtitle" x-text="$store.preflight.lastRun
+          ? 'Last run: ' + $store.preflight.lastRun
+          : 'Not yet run — click Run Pre-flight to check all boxes'"></div>
+      </div>
+      <div class="pf-summary-pills" x-show="$store.preflight.lastRun">
+        <div class="pf-pill pass" x-text="$store.preflight.passCount + ' passed'"></div>
+        <div class="pf-pill fail" x-show="$store.preflight.failCount > 0" x-text="$store.preflight.failCount + ' failed'"></div>
+      </div>
+    </div>
+    <div class="pf-actions">
+      <button class="pf-btn" @click="$store.preflight.runSingle()" :disabled="$store.preflight.running">
+        ⚡ Quick (skip identity)
+      </button>
+      <button class="pf-btn primary" @click="$store.preflight.runFull()" :disabled="$store.preflight.running">
+        <span x-show="!$store.preflight.running">▶ Run Pre-flight</span>
+        <span x-show="$store.preflight.running" style="animation:pulse 1s ease infinite;display:inline-block">
+          ⏳ Running (<span x-text="$store.preflight.doneCount"></span>/<span x-text="$store.preflight.boxes.length"></span>)…
+        </span>
+      </button>
+    </div>
+  </div>
+
+  <!-- Progress bar (visible during run) -->
+  <div class="pf-progress" x-show="$store.preflight.running">
+    <div class="pf-progress-fill"
+         :style="'width:' + ($store.preflight.boxes.length
+           ? Math.round($store.preflight.doneCount / $store.preflight.boxes.length * 100)
+           : 0) + '%'">
+    </div>
+  </div>
+
+  <!-- Error banner -->
+  <div class="pf-body" style="flex:0;padding-bottom:0" x-show="$store.preflight.error">
+    <div class="pf-error-banner" x-text="'⚠️ ' + $store.preflight.error"></div>
+  </div>
+
+  <!-- Box cards -->
+  <div class="pf-body">
+    <template x-if="$store.preflight.boxes.length === 0 && !$store.preflight.running">
+      <div class="empty">
+        <div class="empty-icon">🔍</div>
+        No results yet. Run the pre-flight checklist to verify all mesh boxes.
+      </div>
+    </template>
+
+    <template x-for="box in $store.preflight.boxes" :key="box.key">
+      <div class="pf-box-card"
+           :class="box.state">
+
+        <!-- Card header (click to expand/collapse tests) -->
+        <div class="pf-card-header" @click="box.expanded = !box.expanded">
+          <div class="pf-card-left">
+            <div class="pf-status-dot" :class="box.state"></div>
+            <div>
+              <div class="pf-box-name" x-text="box.label"></div>
+              <div class="pf-box-sub" x-text="box.sub"></div>
+            </div>
+          </div>
+          <div class="pf-card-right">
+            <span class="pf-score" :class="box.state"
+                  x-text="box.state === 'idle' ? '—'
+                    : box.state === 'running' ? '⏳'
+                    : box.passed + '/' + box.total"></span>
+            <span class="pf-dur" x-show="box.durationMs" x-text="(box.durationMs/1000).toFixed(1)+'s'"></span>
+            <span class="pf-chevron" :class="{ open: box.expanded }">▶</span>
+          </div>
+        </div>
+
+        <!-- Test grid (expanded) -->
+        <div x-show="box.expanded" x-transition>
+          <div class="pf-tests">
+            <template x-for="t in box.tests" :key="t.name">
+              <div class="pf-test" :class="t.state">
+                <span class="pf-test-icon"
+                      x-text="t.state==='pass' ? '✓' : t.state==='fail' ? '✗' : t.state==='running' ? '⏳' : '○'"></span>
+                <span class="pf-test-name" x-text="t.label"></span>
+              </div>
+              <!-- Error detail shown inline when failed -->
+              <div x-show="t.state==='fail' && t.error" class="pf-test-err" style="grid-column:1/-1"
+                   x-text="'↳ ' + (t.error || '')"></div>
+            </template>
+          </div>
+
+          <!-- Identity quote -->
+          <div class="pf-identity" x-show="box.identity">
+            <span class="pf-identity-icon">💬</span>
+            <span x-text="'\"' + box.identity + '\"'"></span>
+          </div>
+        </div>
+
+      </div>
+    </template>
+  </div>
+</div>
+
+<script>
+// ────────────────────────────────────────────────────────────────────────────
+// PRE-FLIGHT STORE + CONTROLLER
+// ────────────────────────────────────────────────────────────────────────────
+
+// Test definitions — same order as preflight.js server-side
+const PF_TESTS = [
+  { name: 'redis_write',      label: 'Redis write' },
+  { name: 'redis_read',       label: 'Redis read' },
+  { name: 'vector_upsert',    label: 'Vector upsert' },
+  { name: 'vector_query',     label: 'Vector query' },
+  { name: 'search_upsert',    label: 'Search upsert' },
+  { name: 'ably_publish',     label: 'Ably publish' },
+  { name: 'qstash_reachable', label: 'QStash' },
+  { name: 'ops_ui',           label: 'Ops UI' },
+  { name: 'identity',         label: 'Identity' },
+];
+
+// Box metadata — 10 boxes total (manager + 9 personalities)
+const PF_BOXES = [
+  { key: 'manager',     label: 'Manager',     sub: 'Routes + reflects · SOP-driven',         color: '#9b72f8' },
+  { key: 'architect',   label: 'Architect',   sub: 'Systematic · structure-focused',          color: '#6B7F99' },
+  { key: 'connector',   label: 'Connector',   sub: 'Stakeholder impact · empathetic',         color: '#C48B8B' },
+  { key: 'executor',    label: 'Executor',    sub: 'Results-oriented · ships things',         color: '#B89B5E' },
+  { key: 'visionary',   label: 'Visionary',   sub: 'Creative · non-obvious angles',           color: '#7D5F7A' },
+  { key: 'analyst',     label: 'Analyst',     sub: 'Evidence-driven · assumption-spotter',    color: '#6B8B7A' },
+  { key: 'guardian',    label: 'Guardian',    sub: 'Risk-aware · failure-mode hunter',        color: '#8B8578' },
+  { key: 'explorer',    label: 'Explorer',    sub: 'Opportunity-focused · possibility-scanner', color: '#D4A05F' },
+  { key: 'challenger',  label: 'Challenger',  sub: 'Direct · accountability-focused',         color: '#8B5E5E' },
+  { key: 'synthesizer', label: 'Synthesizer', sub: 'Integrative · convergence-focused',       color: '#A0AA96' },
+];
+
+function makeBoxState(def) {
+  return {
+    key:       def.key,
+    label:     def.label,
+    sub:       def.sub,
+    color:     def.color,
+    state:     'idle',   // idle | running | pass | fail
+    passed:    0,
+    total:     PF_TESTS.length,
+    durationMs: 0,
+    identity:  null,
+    expanded:  false,
+    tests: PF_TESTS.map(t => ({ name: t.name, label: t.label, state: 'idle', error: null })),
+  };
+}
+
+document.addEventListener('alpine:init', () => {
+  Alpine.store('preflight', {
+    running:   false,
+    boxes:     [],
+    doneCount: 0,
+    passCount: 0,
+    failCount: 0,
+    lastRun:   null,
+    error:     null,
+    _hasAutoRun: false,
+
+    // Auto-run quick mode once when tab is first opened
+    maybeAutoRun() {
+      if (!this._hasAutoRun && !this.running && this.boxes.length === 0) {
+        this._hasAutoRun = true;
+        this.runSingle();
+      }
+    },
+
+    // Initialize box states
+    _init(includeIdentity) {
+      this.running   = true;
+      this.doneCount = 0;
+      this.passCount = 0;
+      this.failCount = 0;
+      this.error     = null;
+      this.boxes     = PF_BOXES.map(makeBoxState);
+      // Remove identity test in quick mode
+      if (!includeIdentity) {
+        this.boxes.forEach(b => {
+          b.tests = b.tests.filter(t => t.name !== 'identity');
+          b.total = b.tests.length;
+        });
+      }
+    },
+
+    // Quick mode — skip identity
+    runSingle() { this._run(false); },
+
+    // Full mode — with identity
+    runFull() { this._run(true); },
+
+    async _run(includeIdentity) {
+      if (this.running) return;
+      this._init(includeIdentity);
+
+      const endpoint = `/api/preflight?mode=${includeIdentity ? 'full' : 'quick'}`;
+      try {
+        const resp = await fetch(endpoint);
+        if (!resp.ok) throw new Error(`Server returned ${resp.status}`);
+
+        // Server sends NDJSON — one JSON line per box result as they complete
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+
+          const lines = buf.split('\n');
+          buf = lines.pop(); // incomplete line stays in buffer
+
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed) continue;
+            try {
+              const result = JSON.parse(trimmed);
+              this._applyResult(result, includeIdentity);
+            } catch (e) {
+              console.warn('pf parse:', e.message, trimmed.slice(0,80));
+            }
+          }
+        }
+      } catch (err) {
+        this.error = `Pre-flight failed: ${err.message}`;
+        console.error('preflight error:', err);
+      } finally {
+        this.running   = false;
+        this.lastRun   = new Date().toLocaleTimeString('en-US', { hour12: false });
+      }
+    },
+
+    _applyResult(result, includeIdentity) {
+      const box = this.boxes.find(b => b.key === result.box);
+      if (!box) return;
+
+      box.durationMs = result.durationMs || 0;
+      box.identity   = result.identity || null;
+      box.expanded   = result.ok === false; // auto-expand failed boxes
+
+      if (result.error && !result.tests) {
+        // Box-level error (couldn't even start)
+        box.state  = 'fail';
+        box.passed = 0;
+        box.tests.forEach(t => { t.state = 'idle'; });
+        // Show error on first test slot
+        if (box.tests.length > 0) {
+          box.tests[0].state = 'fail';
+          box.tests[0].error = result.error.slice(0, 120);
+        }
+      } else {
+        const tests = result.tests || {};
+        let passed = 0;
+        for (const t of box.tests) {
+          const outcome = tests[t.name];
+          if (!outcome) { t.state = 'idle'; continue; }
+          t.state = outcome.ok ? 'pass' : 'fail';
+          t.error = outcome.ok ? null : (outcome.error || 'failed').slice(0, 120);
+          if (outcome.ok) passed++;
+        }
+        box.passed = passed;
+        box.state  = (passed === box.tests.length) ? 'pass' : 'fail';
+      }
+
+      this.doneCount++;
+      this.passCount = this.boxes.filter(b => b.state === 'pass').length;
+      this.failCount = this.boxes.filter(b => b.state === 'fail').length;
+    },
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// Ably: listen for live preflight events pushed from the server
+// (boxes publish mesh:health 'preflight' events as they run)
+// ────────────────────────────────────────────────────────────────────────────
+function initPreflightAbly(ablyCh) {
+  ablyCh.subscribe('preflight', (msg) => {
+    const data = typeof msg.data === 'string' ? JSON.parse(msg.data) : msg.data;
+    if (!data) return;
+
+    // If a full summary arrives, apply all results at once
+    if (data.type === 'preflight_complete' && data.boxes) {
+      const store = Alpine.store('preflight');
+      if (!store.running) return; // ignore stale events
+      for (const [key, result] of Object.entries(data.boxes)) {
+        store._applyResult({ box: key, ...result });
+      }
+    }
+  });
+}
+</script>
+</body>
+</html>
