@@ -270,6 +270,8 @@ app.post("/api/notify/:eventId", async (req, res) => {
 
 // ─── Start ──────────────────────────────────────────────────
 const PORT = process.env.PORT || 3002;
+
+if (require.main === module) {
 app.listen(PORT, () => {
   const ablyStatus = process.env.ABLY_API_KEY ? "✅ connected" : "⚠️  disabled (set ABLY_API_KEY)";
   const meshRedis = process.env.MESH_REDIS_REST_URL ? "✅ dedicated" : "⚠️  fallback to Cozy's Redis";
@@ -303,3 +305,6 @@ app.listen(PORT, () => {
   console.log(`  POST /api/flaky                      Simulated flaky service`);
   console.log(`  POST /api/ship                       Simulated shipping\n`);
 });
+}
+
+module.exports = app;
