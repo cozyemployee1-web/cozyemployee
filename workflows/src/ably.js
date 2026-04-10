@@ -499,9 +499,7 @@ function webhookBridge(qstashClient, baseUrl) {
   };
 }
 
-// ─── Exports ─────────────────────────────────────────────────────────────────
-
-module.exports = {
+// ─── Channel Publisher ───────────────────────────────────────────────────────
 /**
  * Publish to an arbitrary named Ably channel.
  * Used by the mesh conversation system for per-session message feeds
@@ -522,6 +520,9 @@ async function emitToChannel(channelName, eventName, data = {}) {
   }
 }
 
+// ─── Exports ─────────────────────────────────────────────────────────────────
+
+module.exports = {
   // Core
   getClient,
   workflowChannel,

@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "NODE_ENV=development node src/server.js",
-    "test": "node src/test.js"
+    "test": "node src/test.js && jest workflows/tests"
   },
   "dependencies": {
     "@upstash/box": "^0.1.30",

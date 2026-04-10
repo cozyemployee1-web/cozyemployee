@@ -66,4 +66,6 @@ test("memory-sync.runDev returns report", () => {
 
 // Summary
 console.log(`\n📊 ${passed} passed, ${failed} failed`);
-process.exit(failed > 0 ? 1 : 0);
+if (failed > 0) {
+  process.exit(1);
+}
